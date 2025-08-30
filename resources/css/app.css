@@ -1,0 +1,131 @@
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+/* Custom styles for flat design with green theme */
+@layer base {
+    html {
+        font-family: 'Inter', system-ui, sans-serif;
+    }
+
+    body {
+        @apply text-gray-900 bg-gray-50;
+    }
+}
+
+@layer components {
+
+    /* Form Input Styles */
+    .form-input {
+        @apply w-full px-4 py-4 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition-all duration-200;
+    }
+
+    .form-input.error {
+        @apply border-red-300 focus:ring-red-200;
+    }
+
+    /* Button Styles */
+    .btn-primary {
+        @apply bg-green-500 hover:bg-green-600 text-white font-medium py-4 px-6 rounded-2xl transition-colors duration-200 focus:ring-4 focus:ring-green-200 focus:outline-none;
+    }
+
+    .btn-secondary {
+        @apply bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-4 px-6 rounded-2xl transition-colors duration-200 focus:ring-4 focus:ring-gray-100 focus:outline-none;
+    }
+
+    /* Card Styles - Flat Design */
+    .card {
+        @apply bg-white rounded-3xl p-6 border border-gray-100;
+    }
+
+    .card-lg {
+        @apply bg-white rounded-3xl p-8 border border-gray-100;
+    }
+
+    /* Navigation Styles */
+    .nav-item {
+        @apply flex items-center px-4 py-3 text-gray-700 rounded-2xl hover:bg-gray-50 transition-colors duration-200;
+    }
+
+    .nav-item.active {
+        @apply bg-green-50 text-green-600 border border-green-100;
+    }
+
+    /* Status Badge Styles */
+    .status-badge {
+        @apply inline-flex items-center px-3 py-1 rounded-full text-sm font-medium;
+    }
+
+    .status-badge.online {
+        @apply bg-green-50 text-green-700;
+    }
+
+    .status-badge.offline {
+        @apply bg-gray-50 text-gray-500;
+    }
+
+    /* Animation Classes */
+    .fade-in {
+        animation: fadeIn 0.5s ease-in-out;
+    }
+
+    .slide-in {
+        animation: slideIn 0.3s ease-out;
+    }
+
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+            transform: translateY(10px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @keyframes slideIn {
+        from {
+            opacity: 0;
+            transform: translateX(-10px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateX(0);
+        }
+    }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    @apply bg-gray-50;
+}
+
+::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-400;
+}
+
+/* Focus Styles */
+*:focus {
+    outline: none;
+}
+
+/* Checkbox Styles */
+input[type="checkbox"] {
+    @apply rounded focus:ring-green-500 text-green-600;
+}
+
+/* Remove default shadows and elevations for flat design */
+.no-shadow {
+    box-shadow: none !important;
+}
