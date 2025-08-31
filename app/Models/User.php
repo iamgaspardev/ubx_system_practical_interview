@@ -116,4 +116,8 @@ class User extends Authenticatable
     {
         return $this->device_ids ? in_array($deviceId, $this->device_ids) : false;
     }
+    public function uploads()
+    {
+        return $this->hasMany(\App\Models\Upload::class);
+    }
 }

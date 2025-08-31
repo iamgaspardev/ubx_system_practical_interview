@@ -71,6 +71,13 @@ return [
             'block_for' => null,
             'after_commit' => false,
         ],
+        'bigdata' => [
+            'driver' => 'redis',
+            'connection' => 'default',
+            'queue' => 'bigdata',
+            'retry_after' => 600,
+            'block_for' => null,
+        ],
 
     ],
 

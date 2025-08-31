@@ -102,30 +102,5 @@
             </form>
         </div>
 
-        <!-- Account Information -->
-        <div class="bg-white rounded-3xl p-8 mt-8 border border-gray-100">
-            <h2 class="text-2xl font-bold text-gray-900 mb-6">Account Information</h2>
-
-            <div class="space-y-4">
-                <div class="flex justify-between items-center py-3 border-b border-gray-100">
-                    <span class="text-gray-600">Account Created</span>
-                    <span class="font-medium text-gray-900">{{ $user->created_at->format('F j, Y g:i A') }}</span>
-                </div>
-
-                <div class="flex justify-between items-center py-3 border-b border-gray-100">
-                    <span class="text-gray-600">Last Updated</span>
-                    <span class="font-medium text-gray-900">{{ $user->updated_at->format('F j, Y g:i A') }}</span>
-                </div>
-
-                <div class="flex justify-between items-center py-3">
-                    <span class="text-gray-600">Account Status</span>
-                    <span
-                        class="inline-flex items-center px-3 py-1 bg-green-50 text-green-700 rounded-full text-sm font-medium">
-                        <div class="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
-                        Active
-                    </span>
-                </div>
-            </div>
-        </div>
     </div>
 @endsection
