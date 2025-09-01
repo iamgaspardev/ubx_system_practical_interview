@@ -7,249 +7,219 @@ use Maatwebsite\Excel\Concerns\FromQuery;
 use Maatwebsite\Excel\Concerns\WithHeadings;
 use Maatwebsite\Excel\Concerns\WithMapping;
 use Maatwebsite\Excel\Concerns\WithChunkReading;
-use Maatwebsite\Excel\Concerns\ShouldAutoSize;
-use Maatwebsite\Excel\Concerns\WithStyles;
 use Maatwebsite\Excel\Concerns\WithTitle;
-use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
-use PhpOffice\PhpSpreadsheet\Style\Color;
-use PhpOffice\PhpSpreadsheet\Style\Fill;
-use PhpOffice\PhpSpreadsheet\Style\Alignment;
-use PhpOffice\PhpSpreadsheet\Style\Border;
+use Maatwebsite\Excel\Concerns\WithEvents;
+use Maatwebsite\Excel\Events\AfterSheet;
+use Illuminate\Support\Facades\Log;
 
-class DiamondDataExport implements FromQuery, WithHeadings, WithMapping, WithChunkReading, ShouldAutoSize, WithStyles, WithTitle
+class DiamondDataExport implements FromQuery, WithHeadings, WithMapping, WithChunkReading, WithTitle, WithEvents
 {
     protected $filters;
+    protected $recordCount;
 
     public function __construct(array $filters = [])
     {
         $this->filters = $filters;
+        // Get record count for optimization decisions
+        $this->recordCount = DiamondData::filter($filters)->count();
+
+        Log::info('DiamondDataExport initialized', [
+            'record_count' => $this->recordCount,
+            'filters' => $filters
+        ]);
     }
 
-    /**
-     * Query to fetch diamond data with applied filters
-     */
     public function query()
     {
+        Log::info('Building export query');
+
+        // Use minimal select to reduce memory usage
         return DiamondData::filter($this->filters)
-            ->with('upload')
+            ->select([
+                'id',
+                'cut',
+                'color',
+                'clarity',
+                'carat_weight',
+                'cut_quality',
+                'lab',
+                'symmetry',
+                'polish',
+                'eye_clean',
+                'culet_size',
+                'culet_condition',
+                'depth_percent',
+                'table_percent',
+                'meas_length',
+                'meas_width',
+                'meas_depth',
+                'girdle_min',
+                'girdle_max',
+                'fluor_color',
+                'fluor_intensity',
+                'fancy_color_dominant_color',
+                'fancy_color_secondary_color',
+                'fancy_color_overtone',
+                'fancy_color_intensity',
+                'total_sales_price',
+                'upload_id',
+                'created_at',
+                'updated_at'
+            ])
+            ->with([
+                'upload' => function ($query) {
+                    $query->select('id', 'original_filename');
+                }
+            ])
             ->orderBy('created_at', 'desc');
     }
 
-    /**
-     * Excel column headings - matches all your CSV columns exactly
-     */
     public function headings(): array
     {
         return [
-            'ID',
+            'Record ID',
             'Cut',
-            'Color',
-            'Clarity',
+            'Color Grade',
+            'Clarity Grade',
             'Carat Weight',
             'Cut Quality',
-            'Lab',
+            'Certification Lab',
             'Symmetry',
             'Polish',
             'Eye Clean',
             'Culet Size',
             'Culet Condition',
-            'Depth Percent (%)',
-            'Table Percent (%)',
-            'Measurement Length (mm)',
-            'Measurement Width (mm)',
-            'Measurement Depth (mm)',
-            'Girdle Min',
-            'Girdle Max',
+            'Depth Percentage',
+            'Table Percentage',
+            'Length (mm)',
+            'Width (mm)',
+            'Depth (mm)',
+            'Girdle Minimum',
+            'Girdle Maximum',
             'Fluorescence Color',
             'Fluorescence Intensity',
-            'Fancy Color Dominant Color',
-            'Fancy Color Secondary Color',
-            'Fancy Color Overtone',
-            'Fancy Color Intensity',
-            'Total Sales Price',
-            'Upload Filename',
+            'Fancy Color - Dominant',
+            'Fancy Color - Secondary',
+            'Fancy Color - Overtone',
+            'Fancy Color - Intensity',
+            'Total Sales Price (USD)',
+            'Source Upload File',
             'Date Added',
-            'Last Updated'
+            'Last Modified'
         ];
     }
 
-    /**
-     * Map each diamond record to Excel row with all columns preserved
-     */
     public function map($diamond): array
     {
+        // Optimized mapping with minimal processing
+        static $rowCount = 0;
+        $rowCount++;
+
+        // Log progress every 1000 rows to monitor memory usage
+        if ($rowCount % 1000 === 0) {
+            Log::info("Export progress: {$rowCount} rows processed", [
+                'memory_usage' => memory_get_usage(true),
+                'memory_peak' => memory_get_peak_usage(true)
+            ]);
+        }
+
         return [
-            $diamond->id ?? '',
-            $diamond->cut ?? '',
-            $diamond->color ?? '',
-            $diamond->clarity ?? '',
-            $diamond->carat_weight ?? '',
-            $diamond->cut_quality ?? '',
-            $diamond->lab ?? '',
-            $diamond->symmetry ?? '',
-            $diamond->polish ?? '',
-            $diamond->eye_clean ?? '',
-            $diamond->culet_size ?? '',
-            $diamond->culet_condition ?? '',
-            $diamond->depth_percent ?? '',
-            $diamond->table_percent ?? '',
-            $diamond->meas_length ?? '',
-            $diamond->meas_width ?? '',
-            $diamond->meas_depth ?? '',
-            $diamond->girdle_min ?? '',
-            $diamond->girdle_max ?? '',
-            $diamond->fluor_color ?? '',
-            $diamond->fluor_intensity ?? '',
-            $diamond->fancy_color_dominant_color ?? '',
-            $diamond->fancy_color_secondary_color ?? '',
-            $diamond->fancy_color_overtone ?? '',
-            $diamond->fancy_color_intensity ?? '',
-            $diamond->total_sales_price ?? '',
-            $diamond->upload->original_filename ?? 'Unknown',
-            $diamond->created_at ? $diamond->created_at->format('Y-m-d H:i:s') : '',
-            $diamond->updated_at ? $diamond->updated_at->format('Y-m-d H:i:s') : ''
+            $diamond->id,
+            $diamond->cut ?: 'N/A',
+            $diamond->color ?: 'N/A',
+            $diamond->clarity ?: 'N/A',
+            $diamond->carat_weight ?: '',
+            $diamond->cut_quality ?: 'N/A',
+            $diamond->lab ?: 'N/A',
+            $diamond->symmetry ?: 'N/A',
+            $diamond->polish ?: 'N/A',
+            $diamond->eye_clean ?: 'N/A',
+            $diamond->culet_size ?: 'N/A',
+            $diamond->culet_condition ?: 'N/A',
+            $diamond->depth_percent ?: '',
+            $diamond->table_percent ?: '',
+            $diamond->meas_length ?: '',
+            $diamond->meas_width ?: '',
+            $diamond->meas_depth ?: '',
+            $diamond->girdle_min ?: 'N/A',
+            $diamond->girdle_max ?: 'N/A',
+            $diamond->fluor_color ?: 'N/A',
+            $diamond->fluor_intensity ?: 'N/A',
+            $diamond->fancy_color_dominant_color ?: 'N/A',
+            $diamond->fancy_color_secondary_color ?: 'N/A',
+            $diamond->fancy_color_overtone ?: 'N/A',
+            $diamond->fancy_color_intensity ?: 'N/A',
+            $diamond->total_sales_price ?: 0,
+            $diamond->upload?->original_filename ?: 'Unknown',
+            $diamond->created_at?->format('Y-m-d H:i:s') ?: '',
+            $diamond->updated_at?->format('Y-m-d H:i:s') ?: ''
         ];
     }
 
-    /**
-     * Process data in chunks for memory efficiency with large datasets
-     */
     public function chunkSize(): int
     {
-        return 1000; // Process 1000 rows at a time to handle large datasets efficiently
+        // Very conservative chunk sizes for memory efficiency
+        if ($this->recordCount > 50000) {
+            return 100;  // Very small chunks for huge datasets
+        } elseif ($this->recordCount > 25000) {
+            return 250;
+        } elseif ($this->recordCount > 10000) {
+            return 500;
+        } else {
+            return 1000;
+        }
     }
 
-    /**
-     * Apply professional styling to the Excel file
-     */
-    public function styles(Worksheet $sheet)
-    {
-        // Get the highest row and column
-        $highestRow = $sheet->getHighestRow();
-        $highestColumn = $sheet->getHighestColumn();
-
-        return [
-            // Style the header row with green theme matching your UI
-            1 => [
-                'font' => [
-                    'bold' => true,
-                    'size' => 12,
-                    'color' => ['argb' => Color::COLOR_WHITE],
-                ],
-                'fill' => [
-                    'fillType' => Fill::FILL_SOLID,
-                    'startColor' => ['argb' => '22C55E'], // Green-500 to match your UBX System theme
-                ],
-                'alignment' => [
-                    'horizontal' => Alignment::HORIZONTAL_CENTER,
-                    'vertical' => Alignment::VERTICAL_CENTER,
-                ],
-                'borders' => [
-                    'allBorders' => [
-                        'borderStyle' => Border::BORDER_THIN,
-                        'color' => ['argb' => '16A34A'], // Darker green for borders
-                    ],
-                ],
-            ],
-
-            // Add borders to all data cells
-            "A1:{$highestColumn}{$highestRow}" => [
-                'borders' => [
-                    'allBorders' => [
-                        'borderStyle' => Border::BORDER_THIN,
-                        'color' => ['argb' => 'E5E7EB'], // Light gray borders
-                    ],
-                ],
-            ],
-
-            // Alternate row coloring for better readability
-            "A2:{$highestColumn}{$highestRow}" => [
-                'fill' => [
-                    'fillType' => Fill::FILL_SOLID,
-                    'startColor' => ['argb' => 'F9FAFB'], // Very light gray
-                ],
-            ],
-
-            // Right-align numeric columns
-            'E:E' => ['alignment' => ['horizontal' => Alignment::HORIZONTAL_RIGHT]], // Carat Weight
-            'M:O' => ['alignment' => ['horizontal' => Alignment::HORIZONTAL_RIGHT]], // Depth, Table, Measurements
-            'Z:Z' => ['alignment' => ['horizontal' => Alignment::HORIZONTAL_RIGHT]], // Total Sales Price
-        ];
-    }
-
-    /**
-     * Set the worksheet title
-     */
     public function title(): string
     {
         return 'Diamond Data Export';
     }
 
-    /**
-     * Configure the worksheet after it's created
-     */
-    public function afterSheet($event)
+    public function registerEvents(): array
     {
-        $sheet = $event->sheet->getDelegate();
+        return [
+            AfterSheet::class => function (AfterSheet $event) {
+                $sheet = $event->sheet->getDelegate();
+                $highestRow = $sheet->getHighestRow();
 
-        // Set row height for header
-        $sheet->getRowDimension(1)->setRowHeight(25);
+                Log::info('Applying sheet formatting', ['rows' => $highestRow]);
 
-        // Freeze the header row
-        $sheet->freezePane('A2');
+                try {
+                    // Only apply minimal formatting to avoid memory issues
+                    $sheet->getRowDimension(1)->setRowHeight(25);
+                    $sheet->freezePane('A2');
 
-        // Set specific column widths for better display
-        $columnWidths = [
-            'A' => 8,   // ID
-            'B' => 12,  // Cut
-            'C' => 10,  // Color
-            'D' => 12,  // Clarity
-            'E' => 14,  // Carat Weight
-            'F' => 15,  // Cut Quality
-            'G' => 15,  // Lab
-            'H' => 12,  // Symmetry
-            'I' => 12,  // Polish
-            'J' => 12,  // Eye Clean
-            'K' => 12,  // Culet Size
-            'L' => 15,  // Culet Condition
-            'M' => 12,  // Depth %
-            'N' => 12,  // Table %
-            'O' => 16,  // Meas Length
-            'P' => 16,  // Meas Width
-            'Q' => 16,  // Meas Depth
-            'R' => 12,  // Girdle Min
-            'S' => 12,  // Girdle Max
-            'T' => 16,  // Fluor Color
-            'U' => 18,  // Fluor Intensity
-            'V' => 20,  // Fancy Color Dominant
-            'W' => 20,  // Fancy Color Secondary
-            'X' => 18,  // Fancy Color Overtone
-            'Y' => 18,  // Fancy Color Intensity
-            'Z' => 16,  // Total Sales Price
-            'AA' => 20, // Upload Filename
-            'AB' => 18, // Date Added
-            'AC' => 18, // Last Updated
+                    // Only auto-size columns for smaller datasets
+                    if ($this->recordCount <= 5000) {
+                        $sheet->getColumnDimension('A')->setAutoSize(true);
+                        $sheet->getColumnDimension('B')->setAutoSize(true);
+                        $sheet->getColumnDimension('C')->setAutoSize(true);
+                        $sheet->getColumnDimension('Z')->setAutoSize(true); // Price column
+                    } else {
+                        // Set fixed widths for large datasets
+                        $sheet->getColumnDimension('A')->setWidth(10);
+                        $sheet->getColumnDimension('B')->setWidth(12);
+                        $sheet->getColumnDimension('C')->setWidth(10);
+                        $sheet->getColumnDimension('Z')->setWidth(16);
+                    }
+
+                    // Add basic header styling only
+                    $sheet->getStyle('A1:AC1')->applyFromArray([
+                        'font' => ['bold' => true],
+                        'fill' => [
+                            'fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID,
+                            'startColor' => ['argb' => '22C55E']
+                        ]
+                    ]);
+
+                    Log::info('Sheet formatting completed successfully');
+
+                } catch (\Exception $e) {
+                    Log::warning('Sheet formatting failed, continuing without formatting', [
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            },
         ];
-
-        foreach ($columnWidths as $column => $width) {
-            $sheet->getColumnDimension($column)->setWidth($width);
-        }
-
-        // Add filter to header row
-        $sheet->setAutoFilter("A1:{$sheet->getHighestColumn()}1");
-
-        // Format price column as currency if there's data
-        if ($sheet->getHighestRow() > 1) {
-            $sheet->getStyle("Z2:Z{$sheet->getHighestRow()}")
-                ->getNumberFormat()
-                ->setFormatCode('$#,##0');
-        }
-
-        // Format date columns
-        if ($sheet->getHighestRow() > 1) {
-            $sheet->getStyle("AB2:AC{$sheet->getHighestRow()}")
-                ->getNumberFormat()
-                ->setFormatCode('yyyy-mm-dd hh:mm:ss');
-        }
     }
 }

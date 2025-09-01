@@ -17,7 +17,7 @@ class ExportLargeDataJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
     public $queue = 'bigdata';
 
-    public $timeout = 1800; // 30 minutes
+    public $timeout = 1800;
     public $tries = 2;
 
     protected $user;

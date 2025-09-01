@@ -26,7 +26,22 @@ Route::middleware('auth')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 });
 
-Route::middleware(['auth'])->group(function () {
+// Route::middleware(['auth'])->group(function () {
+//     // Big Data Upload Routes
+//     Route::prefix('bigdata')->name('bigdata.')->group(function () {
+//         Route::get('/', [BigDataController::class, 'index'])->name('index');
+//         Route::get('/upload', [BigDataController::class, 'create'])->name('create');
+//         Route::post('/upload', [BigDataController::class, 'store'])->name('store');
+//         Route::get('/uploads', [BigDataController::class, 'uploads'])->name('uploads');
+//         Route::get('/upload/{upload}', [BigDataController::class, 'show'])->name('show');
+//         Route::get('/upload/{upload}/progress', [BigDataController::class, 'getProgress'])->name('progress');
+//         Route::delete('/upload/{upload}', [BigDataController::class, 'destroy'])->name('destroy');
+//         Route::get('/export', [BigDataController::class, 'export'])->name('export');
+//         Route::get('/diamond/{diamond}/details', [BigDataController::class, 'getDiamondDetails'])->name('diamond.details');
+//     });
+// });
+
+Route::middleware(['auth', 'optimize.large'])->group(function () {
     // Big Data Upload Routes
     Route::prefix('bigdata')->name('bigdata.')->group(function () {
         Route::get('/', [BigDataController::class, 'index'])->name('index');
@@ -37,6 +52,7 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/upload/{upload}/progress', [BigDataController::class, 'getProgress'])->name('progress');
         Route::delete('/upload/{upload}', [BigDataController::class, 'destroy'])->name('destroy');
         Route::get('/export', [BigDataController::class, 'export'])->name('export');
+        Route::get('/export-simple', [BigDataController::class, 'exportSimple'])->name('export.simple');
         Route::get('/diamond/{diamond}/details', [BigDataController::class, 'getDiamondDetails'])->name('diamond.details');
     });
 });

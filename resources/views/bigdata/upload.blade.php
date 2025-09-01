@@ -52,7 +52,7 @@
                     @enderror
                 </div>
 
-                <!-- File Information (Hidden initially) -->
+                <!-- File Information --->
                 <div id="fileInfo" class="hidden bg-gray-50 rounded-2xl p-6">
                     <h3 class="font-medium text-gray-900 mb-3">File Information</h3>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
