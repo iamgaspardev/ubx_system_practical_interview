@@ -10,8 +10,10 @@ use App\Models\DiamondData;
 use App\Exports\DiamondDataExport;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Log;
 use Maatwebsite\Excel\Facades\Excel;
 use League\Csv\Reader;
+use Response;
 
 class BigDataController extends Controller
 {
@@ -124,25 +126,263 @@ class BigDataController extends Controller
 
     public function export(Request $request)
     {
-        $filters = $request->only([
-            'cut',
-            'color',
-            'clarity',
-            'min_carat',
-            'max_carat',
-            'min_price',
-            'max_price',
-            'lab',
-            'search'
+        Log::info('Starting memory-optimized export', [
+            'user_id' => auth()->id(),
+            'memory_before' => memory_get_usage(true),
+            'memory_limit' => ini_get('memory_limit')
         ]);
 
-        // For large datasets, use queue job for export
-        if (DiamondData::filter($filters)->count() > 10000) {
-            // Dispatch export job and notify user via email
-            return back()->with('success', 'Export is being processed. You will receive an email when ready.');
+        try {
+            $filters = $request->only([
+                'cut',
+                'color',
+                'clarity',
+                'min_carat',
+                'max_carat',
+                'min_price',
+                'max_price',
+                'lab',
+                'search'
+            ]);
+
+            // Check record count first
+            $recordCount = DiamondData::filter($filters)->count();
+
+            if ($recordCount === 0) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No data found matching your filters.'
+                ], 400);
+            }
+
+            Log::info('Export record count', ['count' => $recordCount]);
+
+            // For very large datasets, force CSV export
+            if ($recordCount > 25000) {
+                return $this->exportCSV($filters, $recordCount);
+            }
+
+            // Try Excel first for smaller datasets
+            return $this->exportExcel($filters, $recordCount);
+
+        } catch (\Exception $e) {
+            Log::error('Export failed', [
+                'error' => $e->getMessage(),
+                'memory_usage' => memory_get_usage(true),
+                'memory_peak' => memory_get_peak_usage(true)
+            ]);
+
+            // If memory error, fall back to CSV
+            if (str_contains($e->getMessage(), 'memory')) {
+                Log::info('Falling back to CSV due to memory error');
+                try {
+                    return $this->exportCSV($filters);
+                } catch (\Exception $csvError) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Export failed even with CSV fallback: ' . $csvError->getMessage()
+                    ], 500);
+                }
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Export failed: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Memory-efficient CSV export using streaming
+     */
+    private function exportCSV($filters, $recordCount = null)
+    {
+        Log::info('Starting CSV export');
+
+        // Set conservative limits
+        ini_set('memory_limit', '512M');
+        ini_set('max_execution_time', 600);
+
+        $filename = 'diamond_data_export_' . now()->format('Y_m_d_H_i_s') . '.csv';
+
+        $headers = [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Cache-Control' => 'max-age=0, no-cache, no-store, must-revalidate',
+            'Pragma' => 'no-cache'
+        ];
+
+        return Response::stream(function () use ($filters) {
+            $handle = fopen('php://output', 'w');
+
+            // Add BOM for Excel compatibility
+            fwrite($handle, "\xEF\xBB\xBF");
+
+            // Write headers
+            fputcsv($handle, [
+                'Record ID',
+                'Cut',
+                'Color Grade',
+                'Clarity Grade',
+                'Carat Weight',
+                'Cut Quality',
+                'Lab',
+                'Symmetry',
+                'Polish',
+                'Eye Clean',
+                'Culet Size',
+                'Culet Condition',
+                'Depth %',
+                'Table %',
+                'Length (mm)',
+                'Width (mm)',
+                'Depth (mm)',
+                'Girdle Min',
+                'Girdle Max',
+                'Fluor Color',
+                'Fluor Intensity',
+                'Fancy Dominant',
+                'Fancy Secondary',
+                'Fancy Overtone',
+                'Fancy Intensity',
+                'Total Price (USD)',
+                'Upload File',
+                'Date Added',
+                'Last Modified'
+            ]);
+
+            // Stream data in chunks to avoid memory issues
+            $chunkSize = 2000;
+            $offset = 0;
+            $totalProcessed = 0;
+
+            do {
+                // Clear any previous query results from memory
+                if ($offset > 0) {
+                    \DB::connection()->getPdo()->exec('SELECT 1');
+                }
+
+                $diamonds = DiamondData::filter($filters)
+                    ->select([
+                        'id',
+                        'cut',
+                        'color',
+                        'clarity',
+                        'carat_weight',
+                        'cut_quality',
+                        'lab',
+                        'symmetry',
+                        'polish',
+                        'eye_clean',
+                        'culet_size',
+                        'culet_condition',
+                        'depth_percent',
+                        'table_percent',
+                        'meas_length',
+                        'meas_width',
+                        'meas_depth',
+                        'girdle_min',
+                        'girdle_max',
+                        'fluor_color',
+                        'fluor_intensity',
+                        'fancy_color_dominant_color',
+                        'fancy_color_secondary_color',
+                        'fancy_color_overtone',
+                        'fancy_color_intensity',
+                        'total_sales_price',
+                        'upload_id',
+                        'created_at',
+                        'updated_at'
+                    ])
+                    ->with('upload:id,original_filename')
+                    ->orderBy('created_at', 'desc')
+                    ->offset($offset)
+                    ->limit($chunkSize)
+                    ->get();
+
+                foreach ($diamonds as $diamond) {
+                    fputcsv($handle, [
+                        $diamond->id,
+                        $diamond->cut ?: 'N/A',
+                        $diamond->color ?: 'N/A',
+                        $diamond->clarity ?: 'N/A',
+                        $diamond->carat_weight ?: '',
+                        $diamond->cut_quality ?: 'N/A',
+                        $diamond->lab ?: 'N/A',
+                        $diamond->symmetry ?: 'N/A',
+                        $diamond->polish ?: 'N/A',
+                        $diamond->eye_clean ?: 'N/A',
+                        $diamond->culet_size ?: 'N/A',
+                        $diamond->culet_condition ?: 'N/A',
+                        $diamond->depth_percent ?: '',
+                        $diamond->table_percent ?: '',
+                        $diamond->meas_length ?: '',
+                        $diamond->meas_width ?: '',
+                        $diamond->meas_depth ?: '',
+                        $diamond->girdle_min ?: 'N/A',
+                        $diamond->girdle_max ?: 'N/A',
+                        $diamond->fluor_color ?: 'N/A',
+                        $diamond->fluor_intensity ?: 'N/A',
+                        $diamond->fancy_color_dominant_color ?: 'N/A',
+                        $diamond->fancy_color_secondary_color ?: 'N/A',
+                        $diamond->fancy_color_overtone ?: 'N/A',
+                        $diamond->fancy_color_intensity ?: 'N/A',
+                        $diamond->total_sales_price ?: 0,
+                        $diamond->upload?->original_filename ?: 'Unknown',
+                        $diamond->created_at?->format('Y-m-d H:i:s') ?: '',
+                        $diamond->updated_at?->format('Y-m-d H:i:s') ?: ''
+                    ]);
+                    $totalProcessed++;
+                }
+
+                // Clear the collection from memory
+                unset($diamonds);
+
+                $offset += $chunkSize;
+
+                // Log progress periodically
+                if ($totalProcessed % 2000 === 0) {
+                    Log::info("CSV export progress: {$totalProcessed} records processed");
+                }
+
+            } while ($diamonds->count() === $chunkSize);
+
+            fclose($handle);
+            Log::info("CSV export completed: {$totalProcessed} records");
+
+        }, 200, $headers);
+    }
+
+    /**
+     * Excel export for smaller datasets
+     */
+    private function exportExcel($filters, $recordCount)
+    {
+        Log::info('Starting Excel export', ['record_count' => $recordCount]);
+
+        // Set memory limits based on record count
+        if ($recordCount > 15000) {
+            ini_set('memory_limit', '1024M');
+        } elseif ($recordCount > 5000) {
+            ini_set('memory_limit', '512M');
+        } else {
+            ini_set('memory_limit', '256M');
         }
 
-        return Excel::download(new DiamondDataExport($filters), 'diamond_data_export.xlsx');
+        ini_set('max_execution_time', 300);
+
+        $filename = 'diamond_data_export_' . now()->format('Y_m_d_H_i_s') . '.xlsx';
+
+        return Excel::download(
+            new DiamondDataExport($filters),
+            $filename,
+            \Maatwebsite\Excel\Excel::XLSX,
+            [
+                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'Cache-Control' => 'max-age=0, no-cache, no-store, must-revalidate',
+                'Pragma' => 'no-cache'
+            ]
+        );
     }
 
     public function getProgress(Upload $upload)

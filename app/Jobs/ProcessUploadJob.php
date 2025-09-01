@@ -49,7 +49,8 @@ class ProcessUploadJob implements ShouldQueue
             $totalChunks = ceil($totalRecords / $chunkSize);
 
             for ($i = 0; $i < $totalChunks; $i++) {
-                $startRow = ($i * $chunkSize) + 1; // +1 for header
+                $startRow = ($i * $chunkSize) + 1;
+
                 $endRow = min(($i + 1) * $chunkSize, $totalRecords);
 
                 $chunk = UploadChunk::create([

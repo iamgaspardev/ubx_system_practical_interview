@@ -14,6 +14,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'timeout' => \App\Http\Middleware\SetTimeLimit::class,
+            'optimize.large' => \App\Http\Middleware\OptimizeForLargeResponse::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

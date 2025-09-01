@@ -93,11 +93,11 @@
 
         <!-- Statistics Cards with Real Data -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <!-- Diamond Records Card -->
+            <!-- Uploaded Diamond Records Card -->
             <div class="bg-white rounded-3xl p-6 border border-gray-100 hover:shadow-lg transition-shadow duration-300">
                 <div class="flex items-center justify-between">
                     <div>
-                        <p class="text-sm font-medium text-gray-600 mb-1">Diamond Records</p>
+                        <p class="text-sm font-medium text-gray-600 mb-1">Uploaded Records</p>
                         <p class="text-3xl font-bold text-gray-900">
                             {{ number_format(\App\Models\DiamondData::where('upload_id', '!=', null)->count()) }}
                         </p>
