@@ -158,13 +158,25 @@ class BigDataController extends Controller
             }
 
             // For extremely large datasets (100k+), use background job
-            if ($recordCount > 100000) {
-                ExportLargeDataJob::dispatch(auth()->user(), $filters);
+            if ($recordCount > 95000) {
+                // Create export job with progress tracking
+                $jobId = uniqid('export_');
+                // 1 hour cache
+                cache()->put("export_job_{$jobId}", [
+                    'status' => 'queued',
+                    'total_records' => $recordCount,
+                    'processed_records' => 0,
+                    'user_id' => auth()->id(),
+                    'started_at' => now()
+                ], 3600);
+
+                ExportLargeDataJob::dispatch(auth()->user(), $filters, $jobId);
 
                 return response()->json([
                     'success' => true,
-                    'message' => 'Export job started! You will receive an email when it\'s complete.',
+                    'message' => 'Export started! Processing ' . number_format($recordCount) . ' records in background.',
                     'queued' => true,
+                    'job_id' => $jobId,
                     'estimated_time' => 'This may take 30-60 minutes for ' . number_format($recordCount) . ' records.'
                 ], 202);
             }
@@ -197,12 +209,22 @@ class BigDataController extends Controller
 
                 // For very large datasets, queue the job
                 if ($recordCount > 75000) {
-                    ExportLargeDataJob::dispatch(auth()->user(), $filters);
+                    $jobId = uniqid('export_');
+                    cache()->put("export_job_{$jobId}", [
+                        'status' => 'queued',
+                        'total_records' => $recordCount,
+                        'processed_records' => 0,
+                        'user_id' => auth()->id(),
+                        'started_at' => now()
+                    ], 3600);
+
+                    ExportLargeDataJob::dispatch(auth()->user(), $filters, $jobId);
 
                     return response()->json([
                         'success' => true,
                         'message' => 'Dataset too large for immediate export. Job queued - you will receive an email when complete.',
-                        'queued' => true
+                        'queued' => true,
+                        'job_id' => $jobId
                     ], 202);
                 }
 
@@ -223,23 +245,23 @@ class BigDataController extends Controller
             ], 500);
         }
     }
+
     /**
      * Memory-efficient CSV export 
      */
     private function exportCSV($filters, $recordCount = null)
     {
-        Log::info('Starting CSV export');
+        Log::info('Starting cursor-based CSV export');
 
         if ($recordCount === null) {
             $recordCount = DiamondData::filter($filters)->count();
             Log::info('Export record count', ['count' => $recordCount]);
         }
 
-        // Set conservative limits for large datasets
-        ini_set('memory_limit', '1024M');
-        ini_set('max_execution_time', 1800); // 30 minutes for very large datasets
+        ini_set('memory_limit', '2048M');
+        ini_set('max_execution_time', 3600);
 
-        $filename = 'diamond_data_export_' . now()->format('Y_m_d_H_i_s') . '.csv';
+        $filename = 'data_export_' . now()->format('Y_m_d_H_i_s') . '.csv';
 
         $headers = [
             'Content-Type' => 'text/csv; charset=UTF-8',
@@ -287,19 +309,17 @@ class BigDataController extends Controller
                 'Last Modified'
             ]);
 
-            // Stream data in chunks to avoid memory issues
-            $chunkSize = 1000; // Smaller chunks for 100k+ records
-            $offset = 0;
+            $chunkSize = 500;
             $totalProcessed = 0;
-            $hasMoreRecords = true;
+            $lastId = 0;
 
-            while ($hasMoreRecords) {
-                // Clear any previous query results from memory
-                if ($offset > 0) {
-                    \DB::connection()->getPdo()->exec('SELECT 1');
+            // Use cursor-based pagination instead of offset/limit
+            do {
+                if ($totalProcessed > 0 && $totalProcessed % 10000 === 0) {
+                    gc_collect_cycles();
                 }
 
-                $diamonds = DiamondData::filter($filters)
+                $query = DiamondData::filter($filters)
                     ->select([
                         'id',
                         'cut',
@@ -332,13 +352,17 @@ class BigDataController extends Controller
                         'updated_at'
                     ])
                     ->with('upload:id,original_filename')
-                    ->orderBy('created_at', 'desc')
-                    ->offset($offset)
-                    ->limit($chunkSize)
-                    ->get();
+                    ->where('id', '>', $lastId)
+                    ->orderBy('id', 'asc')
+                    ->limit($chunkSize);
 
-                // Check if we have more records
-                $hasMoreRecords = $diamonds->count() === $chunkSize;
+                $diamonds = $query->get();
+                $currentChunkSize = $diamonds->count();
+
+                if ($currentChunkSize === 0) {
+                    Log::info("No more records found after ID {$lastId}");
+                    break;
+                }
 
                 foreach ($diamonds as $diamond) {
                     fputcsv($handle, [
@@ -372,38 +396,36 @@ class BigDataController extends Controller
                         $diamond->created_at?->format('Y-m-d H:i:s') ?: '',
                         $diamond->updated_at?->format('Y-m-d H:i:s') ?: ''
                     ]);
-                    $totalProcessed++;
 
-                    // Flush output buffer periodically to prevent memory buildup
-                    if ($totalProcessed % 500 === 0) {
-                        if (ob_get_level()) {
-                            ob_flush();
-                        }
-                        flush();
+                    $totalProcessed++;
+                    $lastId = $diamond->id;
+
+                    // Flush output periodically
+                    if ($totalProcessed % 100 === 0) {
+                        fflush($handle);
                     }
                 }
 
-                // Clear the collection from memory
+                // Clear memory
                 unset($diamonds);
 
-                $offset += $chunkSize;
-
-                // Log progress periodically
-                if ($totalProcessed % 2000 === 0) {
-                    Log::info("CSV export progress: {$totalProcessed} records processed", [
+                // Log progress
+                if ($totalProcessed % 5000 === 0) {
+                    Log::info("CSV export progress: {$totalProcessed}/{$recordCount} records", [
+                        'last_id' => $lastId,
                         'memory_usage' => memory_get_usage(true),
-                        'memory_peak' => memory_get_peak_usage(true)
+                        'percentage' => round(($totalProcessed / $recordCount) * 100, 2)
                     ]);
                 }
 
-                // Safety check to prevent infinite loops
-                if ($totalProcessed >= $recordCount + $chunkSize) {
-                    $hasMoreRecords = false;
-                }
-            }
+            } while ($currentChunkSize === $chunkSize && $totalProcessed < $recordCount);
 
             fclose($handle);
-            Log::info("CSV export completed: {$totalProcessed} records", [
+
+            Log::info("CSV export completed", [
+                'total_processed' => $totalProcessed,
+                'target_count' => $recordCount,
+                'last_id' => $lastId,
                 'memory_peak' => memory_get_peak_usage(true)
             ]);
 
@@ -428,7 +450,7 @@ class BigDataController extends Controller
 
         ini_set('max_execution_time', 300);
 
-        $filename = 'diamond_data_export_' . now()->format('Y_m_d_H_i_s') . '.xlsx';
+        $filename = 'data_export_' . now()->format('Y_m_d_H_i_s') . '.xlsx';
 
         return Excel::download(
             new DiamondDataExport($filters),
@@ -440,6 +462,173 @@ class BigDataController extends Controller
                 'Pragma' => 'no-cache'
             ]
         );
+    }
+
+    /**
+     * Download export file with proper streaming
+     */
+    public function downloadExport($filename)
+    {
+        $userId = auth()->id();
+
+        // Security: Check if filename contains user ID (more flexible pattern matching)
+        if (!preg_match('/_(.*_)?' . $userId . '_/', $filename)) {
+            Log::warning('Unauthorized export download attempt', [
+                'filename' => $filename,
+                'user_id' => $userId,
+                'ip' => request()->ip()
+            ]);
+            abort(403, 'Unauthorized access to export file.');
+        }
+
+        // Check both possible locations
+        $publicPath = storage_path('app/public/exports/' . $filename);
+        $privatePath = storage_path('app/exports/' . $filename);
+
+        $fullPath = null;
+        if (file_exists($publicPath)) {
+            $fullPath = $publicPath;
+        } elseif (file_exists($privatePath)) {
+            $fullPath = $privatePath;
+        }
+
+        if (!$fullPath || !file_exists($fullPath)) {
+            // Log::warning('Export file not found', [
+            //     'filename' => $filename,
+            //     'public_path' => $publicPath,
+            //     'private_path' => $privatePath,
+            //     'user_id' => $userId,
+            //     'public_exists' => file_exists($publicPath),
+            //     'private_exists' => file_exists($privatePath),
+            //     'public_dir_contents' => is_dir(dirname($publicPath)) ? scandir(dirname($publicPath)) : 'Directory not found',
+            //     'private_dir_contents' => is_dir(dirname($privatePath)) ? scandir(dirname($privatePath)) : 'Directory not found'
+            // ]);
+            abort(404, 'Export file not found or has expired.');
+        }
+
+        $fileSize = filesize($fullPath);
+        $fileSizeMB = round($fileSize / 1024 / 1024, 2);
+
+        Log::info('Serving export file', [
+            'filename' => $filename,
+            'path' => $fullPath,
+            'size_mb' => $fileSizeMB,
+            'user_id' => $userId
+        ]);
+
+        // filename with data_export prefix for user-friendly naming
+        $displayFilename = str_replace('diamond_export_', 'data_export_', $filename);
+
+        // For large files, response()->file() for better memory efficiency
+        if ($fileSize > 50 * 1024 * 1024) {
+            return response()->file($fullPath, [
+                'Content-Type' => 'text/csv; charset=UTF-8',
+                'Content-Disposition' => 'attachment; filename="' . $displayFilename . '"',
+                'Cache-Control' => 'max-age=0, no-cache, no-store, must-revalidate',
+                'Pragma' => 'no-cache',
+            ]);
+        }
+
+        // For smaller files, use download method
+        return response()->download($fullPath, $displayFilename, [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+            'Cache-Control' => 'max-age=0, no-cache, no-store, must-revalidate',
+            'Pragma' => 'no-cache',
+        ]);
+    }
+
+    /**
+     * Check export status and get download link
+     */
+    public function checkExportStatus(Request $request)
+    {
+        $userId = auth()->id();
+
+        // Clear cache if requested (POST request)
+        if ($request->isMethod('post') && $request->has('clear_cache')) {
+            cache()->forget("export_ready_{$userId}");
+
+            // Also clear any job progress caches
+            $jobId = $request->get('job_id');
+            if ($jobId) {
+                cache()->forget("export_job_{$jobId}");
+            }
+
+            return response()->json(['status' => 'cache_cleared']);
+        }
+
+        // Check for job progress if job_id provided
+        $jobId = $request->get('job_id');
+        if ($jobId) {
+            $jobProgress = cache()->get("export_job_{$jobId}");
+            if ($jobProgress) {
+                return response()->json([
+                    'status' => $jobProgress['status'],
+                    'progress' => [
+                        'total_records' => $jobProgress['total_records'],
+                        'processed_records' => $jobProgress['processed_records'] ?? 0,
+                        'percentage' => $jobProgress['total_records'] > 0
+                            ? round(($jobProgress['processed_records'] ?? 0) / $jobProgress['total_records'] * 100, 1)
+                            : 0
+                    ],
+                    'started_at' => $jobProgress['started_at'] ?? null
+                ]);
+            }
+        }
+
+        // Check cache for recent completed exports
+        $cachedExport = cache()->get("export_ready_{$userId}");
+
+        if ($cachedExport) {
+
+            return response()->json([
+                'status' => 'ready',
+                'filename' => $cachedExport['filename'],
+                'file_size' => $cachedExport['file_size_mb'] . ' MB',
+                'total_records' => number_format($cachedExport['total_records']),
+                'created_at' => $cachedExport['created_at'],
+                'download_url' => $cachedExport['download_url'],
+                'is_recent' => true
+            ]);
+        }
+
+        return response()->json([
+            'status' => 'not_ready',
+            'message' => 'Export not ready yet.'
+        ]);
+    }
+
+    /**
+     * Get export job progress
+     */
+    public function getExportProgress(Request $request)
+    {
+        $jobId = $request->get('job_id');
+        if (!$jobId) {
+            return response()->json(['error' => 'Job ID required'], 400);
+        }
+
+        $progress = cache()->get("export_job_{$jobId}");
+
+        if (!$progress) {
+            return response()->json(['error' => 'Job not found or expired'], 404);
+        }
+
+        // Ensure user can only see their own job progress
+        if ($progress['user_id'] !== auth()->id()) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        return response()->json([
+            'status' => $progress['status'],
+            'total_records' => $progress['total_records'],
+            'processed_records' => $progress['processed_records'] ?? 0,
+            'percentage' => $progress['total_records'] > 0
+                ? round(($progress['processed_records'] ?? 0) / $progress['total_records'] * 100, 1)
+                : 0,
+            'started_at' => $progress['started_at'],
+            'estimated_completion' => $progress['estimated_completion'] ?? null
+        ]);
     }
 
     public function getProgress(Upload $upload)
@@ -457,7 +646,6 @@ class BigDataController extends Controller
             'total' => $upload->total_records,
         ]);
     }
-
     public function destroy(Upload $upload)
     {
         $this->authorize('delete', $upload);

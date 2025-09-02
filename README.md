@@ -48,7 +48,9 @@ Authorization: Bearer {your_token}
 ## PROJECT RUNNING
 
 ## RUN THIS TO start the quee
-1: php artisan queue:work --timeout=600
+ - php artisan queue:restart
+ - php artisan queue:work --timeout=600
+ - php artisan queue:work --queue=exports --verbose
 
 ## RUN THIS TO start Backend
 2: php artisan serve --host=192.168.1.111 --port=8000
