@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\ExportLargeDataJob;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use App\Http\Requests\BigDataUploadRequest;
 use App\Jobs\ProcessUploadJob;
@@ -147,6 +148,7 @@ class BigDataController extends Controller
 
             // Check record count first
             $recordCount = DiamondData::filter($filters)->count();
+            Log::info('Export record count', ['count' => $recordCount]);
 
             if ($recordCount === 0) {
                 return response()->json([
@@ -155,14 +157,29 @@ class BigDataController extends Controller
                 ], 400);
             }
 
-            Log::info('Export record count', ['count' => $recordCount]);
+            // For extremely large datasets (100k+), use background job
+            if ($recordCount > 100000) {
+                ExportLargeDataJob::dispatch(auth()->user(), $filters);
 
-            // For very large datasets, force CSV export
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Export job started! You will receive an email when it\'s complete.',
+                    'queued' => true,
+                    'estimated_time' => 'This may take 30-60 minutes for ' . number_format($recordCount) . ' records.'
+                ], 202);
+            }
+
+            // For very large datasets (50k-100k), force CSV with immediate response
+            if ($recordCount > 50000) {
+                return $this->exportCSV($filters, $recordCount);
+            }
+
+            // For large datasets (25k-50k), try CSV first
             if ($recordCount > 25000) {
                 return $this->exportCSV($filters, $recordCount);
             }
 
-            // Try Excel first for smaller datasets
+            // Try Excel for smaller datasets
             return $this->exportExcel($filters, $recordCount);
 
         } catch (\Exception $e) {
@@ -172,15 +189,30 @@ class BigDataController extends Controller
                 'memory_peak' => memory_get_peak_usage(true)
             ]);
 
-            // If memory error, fall back to CSV
+            // If memory error, fall back to CSV or queue
             if (str_contains($e->getMessage(), 'memory')) {
-                Log::info('Falling back to CSV due to memory error');
+                Log::info('Memory error detected, checking fallback options');
+
+                $recordCount = $recordCount ?? DiamondData::filter($filters)->count();
+
+                // For very large datasets, queue the job
+                if ($recordCount > 75000) {
+                    ExportLargeDataJob::dispatch(auth()->user(), $filters);
+
+                    return response()->json([
+                        'success' => true,
+                        'message' => 'Dataset too large for immediate export. Job queued - you will receive an email when complete.',
+                        'queued' => true
+                    ], 202);
+                }
+
+                // Try CSV fallback for smaller datasets
                 try {
-                    return $this->exportCSV($filters);
+                    return $this->exportCSV($filters, $recordCount);
                 } catch (\Exception $csvError) {
                     return response()->json([
                         'success' => false,
-                        'message' => 'Export failed even with CSV fallback: ' . $csvError->getMessage()
+                        'message' => 'Export failed even with CSV fallback. Try applying more specific filters to reduce the dataset size.'
                     ], 500);
                 }
             }
@@ -191,17 +223,21 @@ class BigDataController extends Controller
             ], 500);
         }
     }
-
     /**
-     * Memory-efficient CSV export using streaming
+     * Memory-efficient CSV export 
      */
     private function exportCSV($filters, $recordCount = null)
     {
         Log::info('Starting CSV export');
 
-        // Set conservative limits
-        ini_set('memory_limit', '512M');
-        ini_set('max_execution_time', 600);
+        if ($recordCount === null) {
+            $recordCount = DiamondData::filter($filters)->count();
+            Log::info('Export record count', ['count' => $recordCount]);
+        }
+
+        // Set conservative limits for large datasets
+        ini_set('memory_limit', '1024M');
+        ini_set('max_execution_time', 1800); // 30 minutes for very large datasets
 
         $filename = 'diamond_data_export_' . now()->format('Y_m_d_H_i_s') . '.csv';
 
@@ -212,7 +248,7 @@ class BigDataController extends Controller
             'Pragma' => 'no-cache'
         ];
 
-        return Response::stream(function () use ($filters) {
+        return Response::stream(function () use ($filters, $recordCount) {
             $handle = fopen('php://output', 'w');
 
             // Add BOM for Excel compatibility
@@ -252,11 +288,12 @@ class BigDataController extends Controller
             ]);
 
             // Stream data in chunks to avoid memory issues
-            $chunkSize = 2000;
+            $chunkSize = 1000; // Smaller chunks for 100k+ records
             $offset = 0;
             $totalProcessed = 0;
+            $hasMoreRecords = true;
 
-            do {
+            while ($hasMoreRecords) {
                 // Clear any previous query results from memory
                 if ($offset > 0) {
                     \DB::connection()->getPdo()->exec('SELECT 1');
@@ -300,6 +337,9 @@ class BigDataController extends Controller
                     ->limit($chunkSize)
                     ->get();
 
+                // Check if we have more records
+                $hasMoreRecords = $diamonds->count() === $chunkSize;
+
                 foreach ($diamonds as $diamond) {
                     fputcsv($handle, [
                         $diamond->id,
@@ -333,6 +373,14 @@ class BigDataController extends Controller
                         $diamond->updated_at?->format('Y-m-d H:i:s') ?: ''
                     ]);
                     $totalProcessed++;
+
+                    // Flush output buffer periodically to prevent memory buildup
+                    if ($totalProcessed % 500 === 0) {
+                        if (ob_get_level()) {
+                            ob_flush();
+                        }
+                        flush();
+                    }
                 }
 
                 // Clear the collection from memory
@@ -342,13 +390,22 @@ class BigDataController extends Controller
 
                 // Log progress periodically
                 if ($totalProcessed % 2000 === 0) {
-                    Log::info("CSV export progress: {$totalProcessed} records processed");
+                    Log::info("CSV export progress: {$totalProcessed} records processed", [
+                        'memory_usage' => memory_get_usage(true),
+                        'memory_peak' => memory_get_peak_usage(true)
+                    ]);
                 }
 
-            } while ($diamonds->count() === $chunkSize);
+                // Safety check to prevent infinite loops
+                if ($totalProcessed >= $recordCount + $chunkSize) {
+                    $hasMoreRecords = false;
+                }
+            }
 
             fclose($handle);
-            Log::info("CSV export completed: {$totalProcessed} records");
+            Log::info("CSV export completed: {$totalProcessed} records", [
+                'memory_peak' => memory_get_peak_usage(true)
+            ]);
 
         }, 200, $headers);
     }

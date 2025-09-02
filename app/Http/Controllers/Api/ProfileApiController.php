@@ -50,13 +50,7 @@ class ProfileApiController extends Controller
 
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255',
-                'email' => [
-                    'required',
-                    'string',
-                    'email',
-                    'max:255',
-                    Rule::unique('users')->ignore($user->id),
-                ],
+                'device_id' => 'nullable|string|max:255',
                 'current_password' => 'nullable|required_with:password',
                 'password' => 'nullable|string|min:6|confirmed',
             ]);
@@ -67,6 +61,25 @@ class ProfileApiController extends Controller
                     'message' => 'Validation failed',
                     'errors' => $validator->errors()
                 ], 422);
+            }
+
+            // Handle device ID tracking
+            $deviceIds = $user->device_ids ?? [];
+            $deviceIdCaptured = false;
+
+            if ($request->filled('device_id')) {
+                $newDeviceId = $request->device_id;
+                if (!in_array($newDeviceId, $deviceIds)) {
+                    $deviceIds[] = $newDeviceId;
+                    $deviceIdCaptured = true;
+                }
+            }
+
+            // Check for device ID from header (X-Device-ID)
+            $headerDeviceId = $request->header('X-Device-ID');
+            if ($headerDeviceId && !in_array($headerDeviceId, $deviceIds)) {
+                $deviceIds[] = $headerDeviceId;
+                $deviceIdCaptured = true;
             }
 
             // Verify current password if trying to change password
@@ -86,10 +99,11 @@ class ProfileApiController extends Controller
                 }
             }
 
-            // Update user data
+            // Update user data (name only, email is immutable for security)
             $updateData = [
                 'name' => $request->name,
-                'email' => $request->email,
+                'device_ids' => $deviceIds,
+                'last_active_at' => now(),
             ];
 
             if ($request->filled('password')) {
@@ -100,13 +114,16 @@ class ProfileApiController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Profile updated successfully',
+                'message' => $deviceIdCaptured ?
+                    'Profile updated successfully. Device registered.' :
+                    'Profile updated successfully',
                 'data' => [
                     'user' => [
                         'id' => $user->id,
                         'name' => $user->name,
                         'email' => $user->email,
                         'profile_image' => $user->profile_image ? asset('storage/' . $user->profile_image) : null,
+                        'device_count' => count($deviceIds),
                         'created_at' => $user->created_at,
                         'updated_at' => $user->updated_at,
                     ]
@@ -122,12 +139,14 @@ class ProfileApiController extends Controller
         }
     }
 
+
     //Update profile image 
     public function updateImage(Request $request)
     {
         try {
             $validator = Validator::make($request->all(), [
-                'image' => 'required|image|mimes:jpeg,png,jpg,gif|max:2048', // 2MB max
+                'image' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:5120', // 5MB max
+                'device_id' => 'nullable|string|max:255',
             ]);
 
             if ($validator->fails()) {
@@ -140,6 +159,25 @@ class ProfileApiController extends Controller
 
             $user = $request->user();
 
+            // Handle device ID tracking
+            $deviceIds = $user->device_ids ?? [];
+            $deviceIdCaptured = false;
+            
+            if ($request->filled('device_id')) {
+                $newDeviceId = $request->device_id;
+                if (!in_array($newDeviceId, $deviceIds)) {
+                    $deviceIds[] = $newDeviceId;
+                    $deviceIdCaptured = true;
+                }
+            }
+
+            // Check for device ID from header
+            $headerDeviceId = $request->header('X-Device-ID');
+            if ($headerDeviceId && !in_array($headerDeviceId, $deviceIds)) {
+                $deviceIds[] = $headerDeviceId;
+                $deviceIdCaptured = true;
+            }
+
             // Delete old profile image if exists
             if ($user->profile_image && Storage::disk('public')->exists($user->profile_image)) {
                 Storage::disk('public')->delete($user->profile_image);
@@ -148,18 +186,25 @@ class ProfileApiController extends Controller
             // Store new image
             $imagePath = $request->file('image')->store('profile-images', 'public');
 
-            // Update user profile image path
-            $user->update(['profile_image' => $imagePath]);
+            // Update user profile
+            $user->update([
+                'profile_image' => $imagePath,
+                'device_ids' => $deviceIds,
+                'last_active_at' => now(),
+            ]);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Profile image updated successfully',
+                'message' => $deviceIdCaptured ? 
+                    'Profile image updated successfully. Device registered.' : 
+                    'Profile image updated successfully',
                 'data' => [
                     'user' => [
                         'id' => $user->id,
                         'name' => $user->name,
                         'email' => $user->email,
                         'profile_image' => asset('storage/' . $user->profile_image),
+                        'device_count' => count($deviceIds),
                         'created_at' => $user->created_at,
                         'updated_at' => $user->updated_at,
                     ]
