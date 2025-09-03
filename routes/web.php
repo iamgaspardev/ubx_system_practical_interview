@@ -37,7 +37,8 @@ Route::middleware(['auth', 'optimize.large'])->group(function () {
         Route::get('/upload/{upload}', [BigDataController::class, 'show'])->name('show');
         Route::get('/upload/{upload}/progress', [BigDataController::class, 'getProgress'])->name('progress');
         Route::delete('/upload/{upload}', [BigDataController::class, 'destroy'])->name('destroy');
-        Route::get('/export', [BigDataController::class, 'export'])->name('export');
+        // Route::get('/export', [BigDataController::class, 'export'])->name('export');
+        Route::match(['GET', 'POST'], '/export', [BigDataController::class, 'export'])->name('export');
         Route::get('/export-simple', [BigDataController::class, 'exportSimple'])->name('export.simple');
         Route::get('/diamond/{diamond}/details', [BigDataController::class, 'getDiamondDetails'])->name('diamond.details');
         Route::post('/export/status', [BigDataController::class, 'checkExportStatus'])

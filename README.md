@@ -362,3 +362,10 @@ POST /api/logout            - Logout user
 http://localhost:8000/api
 Authorization: Bearer {your_token}
 
+### Run Test
+
+```bash
+# Clear all caches
+php artisan test --filter BigDataExportTest
+
+```
