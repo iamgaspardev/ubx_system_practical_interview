@@ -55,9 +55,9 @@ class BigDataExportTest extends TestCase
         $this->actingAs($this->user);
 
         // Mock DiamondData to simulate large dataset
-        $this->mock(\App\Models\DiamondData::class, function ($mock) {
+        $this->mock(DiamondData::class, function ($mock) {
             $mock->shouldReceive('filter')->andReturnSelf();
-            $mock->shouldReceive('count')->andReturn(100000); // Large dataset
+            $mock->shouldReceive('count')->andReturn(100000);
         });
 
         $response = $this->post(route('bigdata.export'));
@@ -137,7 +137,7 @@ class BigDataExportTest extends TestCase
         ]);
 
         // Mock DiamondData to simulate memory error
-        $this->mock(\App\Models\DiamondData::class, function ($mock) {
+        $this->mock(DiamondData::class, function ($mock) {
             $mock->shouldReceive('filter')->andReturnSelf();
             $mock->shouldReceive('count')->andReturn(80000);
             $mock->shouldReceive('with')->andReturnSelf();
